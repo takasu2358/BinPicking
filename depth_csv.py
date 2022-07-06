@@ -29,6 +29,7 @@ def pointcloud_process(pcd_matrix, flat):
     pcd_matrix2[:, 1] += -bottom
 
     depth, matrix_image = xyz2matrix(pcd_matrix2)
+
     depth = depth - flat
     depth[depth<3] = 0
     depth[0:20] = 0
@@ -48,7 +49,7 @@ def PtoD(depth):
     for i, row in enumerate(depth):
         for j, z in enumerate(row):
             if z <= MAX_DEPTH:
-                depth[i][j] = 255*((z-MIN_DEPTH)/(MAX_DEPTH-MIN_DEPTH))
+                depth[i][j] = 255*(z/MAX_DEPTH)
             elif z > MAX_DEPTH:
                 depth[i][j] = 255
     
@@ -57,11 +58,12 @@ def PtoD(depth):
 def xyz2matrix(matrix):
     depth = np.zeros((WINDOW_HEIGHT*num, WINDOW_WIDTH*num))
     matrix_image = np.zeros((WINDOW_HEIGHT*num, WINDOW_WIDTH*num))
+    matrix[:, 0:2] *= num
     for i, xyz in enumerate(matrix):
-        x = int(xyz[1]*num)
-        y = int(xyz[0]*num)
-        depth[x][y] = high - xyz[2]
-        matrix_image[x][y] = i
+        x = int(xyz[1])
+        y = int(xyz[0])
+        depth[x, y] = high - xyz[2]
+        matrix_image[x, y] = i
     depth, matrix_image = max_pooling(depth, matrix_image)
 
     return depth, matrix_image
@@ -72,10 +74,10 @@ def max_pooling(depth, matrix_image):
     for x in range(WINDOW_HEIGHT):
         for y in range(WINDOW_WIDTH):
             kernel = depth[x*3:x*3+3, y*3:y*3+3]
-            max_num = np.max(kernel)
-            index = np.argwhere(kernel == max_num)[0]
-            small_depth[x][y] = max_num
-            matrix_small_image[x][y] = matrix_image[x*3+index[0]][y*3+index[1]]
+            max_index = np.argmax(kernel)
+            q, mod = divmod(max_index, 3)
+            small_depth[x][y] = kernel[q][mod]
+            matrix_small_image[x][y] = matrix_image[x*3+q][y*3+mod]
     
     return small_depth, matrix_small_image
  
@@ -86,17 +88,19 @@ def main(pc):
     flat_list = pd.read_csv(flatpath, header=None).values
     pcd_matrix = np.asanyarray(pc)
 
+    # t1 = time.time() - start
+    # print(t1)
+
     depth, matrix_image, matrix = pointcloud_process(pcd_matrix, flat_list)
+
+    # t2 = time.time() - start - t1
+    # print(t2)
 
     depth, MAX_DEPTH = PtoD(depth)
     depth[depth < 0] = 0
 
-    # from PIL import Image
-    # pil_depth = Image.fromarray(depth)
-    # pil_depth = pil_depth.rotate(2)
-    # depth = np.array(pil_depth)
-    # depth[0:50] = 0
-    # depth[:, 0:50] = 0
+    # t3 = time.time() - start - t2 - t1
+    # print(t3)
 
     elapsed_time = time.time() - start#処理の終了時間を取得
     print("Converting PC to depth image is succeeded!")

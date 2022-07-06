@@ -1,3 +1,6 @@
+from heapq import merge
+from pickletools import uint8
+from re import template
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -52,9 +55,11 @@ def get_neighbor(poi, gray_img):
                 continue
             x, y = x0 + i, y0 + j #近傍点の座標
             #近傍点の座標が画像サイズ内かつ画素値が0より大きい
-            if 0 < x and x < height and 0 < y and y < width:
+            try:
                 if gray_img[x][y] > 0: 
                     neighbor.append([x, y])#neighborに格納
+            except IndexError:
+                continue
 
     return neighbor
 
@@ -203,8 +208,7 @@ class MakeImage():
 
         return image
     
-    def make_mini_image(self, point_list, value):
-        margin = 30
+    def make_mini_image(self, point_list, value, margin = 30):
         point_array = np.array(point_list)
         x_list = point_array[:, 0]
         y_list = point_array[:, 1]
@@ -214,10 +218,10 @@ class MakeImage():
         miniWidth = maxY - minY + margin*2
         miniImg = np.zeros((miniHeight, miniWidth))
 
+        x_list -= minX - margin
+        y_list -= minY - margin
         for i in range(0, len(point_list)):
-            x = x_list[i] - minX + margin
-            y = y_list[i] - minY + margin
-            miniImg[x][y] = value
+            miniImg[x_list[i], y_list[i]] = value
 
         return miniImg, minX-margin, minY-margin, miniHeight, miniWidth, margin
 
@@ -293,7 +297,7 @@ class Detect():
                                 branch_img[i][j] = 0 #branch_imgから削除
                 count += 1
         
-        return ad_branch_point, branch_point, end_point 
+        return ad_branch_point, branch_point, end_point         
 
 class RegionGrowing():
 
@@ -307,10 +311,8 @@ class RegionGrowing():
         else:
             self.ec = cfg["extend_condition_small_depth"]
         self.lat = cfg["large_area_threshold"]
-        self.sat = cfg["small_area_threshold"]
 
     def search_seed(self):
-        V = Visualize()
         MI = MakeImage()
         D = Detect()
 
@@ -318,97 +320,66 @@ class RegionGrowing():
             raise ValueError("入力画像は2次元(グレースケール)にしてください")
 
         region_list = []
-        RG_edge_list = []
-        nozeros = np.nonzero(self.img)
-        while len(nozeros[0]) > 0:
-            seed = [[nozeros[0][0], nozeros[1][0]]]
-            self.img[seed[0][0]][seed[0][1]] = 0
-            region, RG_edge = self.region_growing(seed, [], [])
-            nozeros = np.nonzero(self.img)
-            region.insert(0, seed[0])
+        # self.delete_small_region()
+        value, seed = self.serch_nonzero(0, 0)
+        while value:
+            self.img[seed[0]][seed[1]] = 0
+            region = self.region_growing([seed], [])
+            region.insert(0, seed)
+            value, seed = self.serch_nonzero(seed[0], seed[1])
             if len(region) > self.lat:
                 region_list.append(region)
-                RG_edge = get_unique_list(RG_edge)
-                RG_edge_list.append(RG_edge)
 
-        return region_list, RG_edge_list
+        return region_list
 
-    def region_growing(self, prepartial_region, region, RG_edge):
-        if len(prepartial_region) == 0:
-            return region, RG_edge
+    def region_growing(self, prepartial_region, region):
+        if prepartial_region == []:
+            return region
 
         for poi in prepartial_region:
             neighbor = get_neighbor(poi, self.img)
             if len(neighbor) == 0:
                 continue
-            partial_region, RG_edge = self.compare_luminosity(neighbor, poi, RG_edge)
+            partial_region = self.compare_luminosity(neighbor, poi)
             region.extend(partial_region)
-            region, RG_edge = self.region_growing(partial_region, region, RG_edge)
+            region = self.region_growing(partial_region, region)
 
-        return region, RG_edge
+        return region
 
-    def compare_luminosity(self, neighbor, poi, RG_edge):
+    def compare_luminosity(self, neighbor, poi):
         partial_region = []
-
         poi_luminosity = self.img_copy[poi[0]][poi[1]]
         for xy in neighbor:
             neighbor_luminosity = self.img_copy[xy[0]][xy[1]]
             if np.abs(poi_luminosity - neighbor_luminosity) < self.ec:
                 partial_region.append(xy)
                 self.img[xy[0]][xy[1]] = 0
-            else:
-                RG_edge.append(xy)
         
-        return partial_region, RG_edge
+        return partial_region
 
-    def watershed_canny(self, region_list, RG_edge_list):
-        MI = MakeImage()
-        all = np.zeros((height, width)) 
-        for RG_edge, region in zip(RG_edge_list, region_list):
-            if len(RG_edge) < 10:
-                continue 
-            RG_edge_img = MI.make_image(RG_edge, 1)
-            region_img = MI.make_image(region, 1)
-            dif_img2 = RG_edge_img - region_img
-            ero_dif2 = cv2.erode(dif_img2, np.ones((3, 3), np.uint8))
-            _, labels, stats, _ = cv2.connectedComponentsWithStats(np.uint8(ero_dif2))
-            for i in range(1, len(stats)):
-                if stats[i][4] < 10:
-                    continue
-                lab = labels.copy()
-                lab[lab != i] = 0
-                lab = lab.astype("uint8")
-                close = cv2.morphologyEx(lab, cv2.MORPH_CLOSE, np.ones((3,3), np.uint8), iterations=3)
-                all += close
+    def serch_nonzero(self, x, y):
+        for i in range(x, height):
+            if i == x:
+                for j in range(y, width):
+                    value = self.img[i][j]
+                    if value != 0:
+                        return value, [i, j] 
+            else:
+                for j in range(0, width):
+                    value = self.img[i][j]
+                    if value != 0:
+                        return value, [i, j]
+        return 0, []
 
-        gray = img_copy.copy()
-        gray[gray > 0] = 1
-        big = cv2.dilate(gray, np.ones((3, 3), np.uint8))
-        big = big.astype("uint8")
-        all[all>1] = 1
-        all = all.astype("uint8")
-        unknown = big - all
-        unknown[unknown<0] = 0
-        _, markers = cv2.connectedComponents(all)
-        markers = markers+1
-        markers[unknown==1] = 0
-        water = img_copy.copy()
-        canny = cv2.Canny(water.astype("uint8"), 0, 30)
-        water = gray2color(water)
-        water = water.astype("uint8")
-        markers = cv2.watershed(water, markers)
-        water[markers==-1] = (0, 0, 255)
-        water[markers>0] = (0, 0, 0)
-        gray_water = cv2.cvtColor(water, cv2.COLOR_BGR2GRAY)
-        gray_water[gray_water>0] = 1
-        canny[canny>0] = 1
-        canny = cv2.dilate(canny, np.ones((3, 3), dtype = np.uint8))
-        check = gray_water * canny
-        check = cv2.dilate(check, np.ones((3, 3), np.uint8))
-        region_img = img_copy.copy()
-        region_img[check > 0] = 0
-
-        return region_img
+    def delete_small_region(self):
+        _, input_image2 = cv2.threshold(self.img.astype(np.uint8), 15, 255, cv2.THRESH_BINARY)
+        nlabels, labels, stats, _ = cv2.connectedComponentsWithStats(input_image2)
+        sizes = stats[1:, -1]
+        _img = np.zeros((height, width))
+        for i in range(1, nlabels):
+            if 50 < sizes[i - 1]:
+                _img[labels == i] = 1
+        self.img = self.img * _img
         
 class ConnectRegion():
 
@@ -420,7 +391,6 @@ class ConnectRegion():
         self.nextPdist = 6 #Don't change(loop process will go wrong)
         self.correct_length = 150
         self.error_length = 30
-        self.filename = ["{}.png".format(i) for i in range(0, 10)]
         self.full_length = cfg["full_length"] 
 
     def search_center_points(self):
@@ -428,8 +398,8 @@ class ConnectRegion():
         center_points_list, end_point_list = [], []
         count = 0
         MI = MakeImage()
-        Visual = Visualize()
 
+        st = time.time()
         ##########################テンプレートの作成############################################
         ground_img = np.zeros((self.Size, self.Size)) #テンプレートの下地を作成
         for i in range(0, self.Step):
@@ -444,153 +414,133 @@ class ConnectRegion():
         #region_listに格納された各領域に対して中央線を求める
         for region in self.region_list:
             center_points, fore_points, back_points = [], [], []
-            if count > -1:
-                reg_img, minx, miny, Height, Width, _ = MI.make_mini_image(region, 1)  #領域の画像を作成
+            reg_img, minx, miny, Height, Width, _ = MI.make_mini_image(region, 1)  #領域の画像を作成
+            
+            #######################最初の中心点を求める#########################################
+            reg_img = cv2.morphologyEx(reg_img, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))  #クロージング処理
+            blur = cv2.GaussianBlur(reg_img, (45, 45), 0)  #ガウシアンブラーをかける
+            bm = np.argmax(blur)  #輝度値が最大のインデックスを求め得る
+            center_x, center_y = divmod(bm, Width)
+            ####################################################################################
+    
+            pil_img = Image.fromarray(reg_img) #cropを使うためpillow型に変更
+            pre_index = -1 #はじめはpre_indexは無いため、-1を代入
+            center1, center2, nextPdist1, nextPdist2, pre_index, first_dist, pmsign1, pmsign2 = self.center_orientation([center_x, center_y], pre_index, 1, 0, pil_img, line_templates)
+            pre_index1 = pre_index
+            pre_index2 = pre_index
+            shift1, shift2 = 0, 0
 
-                #######################最初の中心点を求める#########################################
-                reg_img = cv2.morphologyEx(reg_img, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))  #クロージング処理
-                blur = cv2.GaussianBlur(reg_img, (45, 45), 0)  #ガウシアンブラーをかける
-                bm = np.argmax(blur)  #輝度値が最大のインデックスを求め得る
-                center_x = (bm+1)//Width  #中心のx座標を求める
-                center_y = bm-center_x*Width  #中心のy座標を求める
-                ####################################################################################
+            #はじめの中心点からは２方向に伸びるのでwhileも２つ
+            #前方向の探索
+            fore_count, fore_loop_flag = 0, 0
+            while 1:
+                #終了条件：次の候補点の画素値が０の場合
+                if reg_img[center1[0]][center1[1]] == 0:
+                    break
+                #点数が100点以上の場合は、ループのチェックが入る
+                if fore_count > 100:
+                    fore_loop_flag, _ = self.check_loop(fore_points,  -1) #最後の点に対して近傍点を確認する
+                    break
+                center1, current_center, current_nextPdist, pre_index1, pmsign1, dist, current_shift = self.center_orientation(center1, pre_index1, pmsign1, shift1, pil_img, line_templates)
+                if pre_index1 == -100:
+                    break
+                fore_points.append([current_center[0]+minx, current_center[1]+miny, nextPdist1, dist, shift1])
+                nextPdist1 = current_nextPdist
+                shift1 = current_shift
+                fore_count += 1
 
-                pil_img = Image.fromarray(reg_img) #cropを使うためpillow型に変更
-                pre_index = -1 #はじめはpre_indexは無いため、-1を代入
-                reg_color = gray2color(reg_img) #確認用のカラー画像
-                center1, center2, nextPdist1, nextPdist2, pre_index, first_dist, pmsign1, pmsign2 = self.center_orientaion([center_x, center_y], pre_index, 1, 0, pil_img, line_templates, reg_color)
-                pre_index1 = pre_index
-                pre_index2 = pre_index
-                shift1, shift2 = 0, 0
+            #ループが存在すると判定された場合、最初の点の近傍を確認する(最初の点の超近傍に点が存在すればその点をループの終点とする)
+            if fore_loop_flag == 1:
+                print("Loop exists in fore center points process")
+                start_flag, min_dist_index = self.check_loop(fore_points, 0)
+                if start_flag == 0:
+                    # raise ValueError("ループ処理に場合分けが必要です")
+                    print("ループ処理に場合分けが必要です")
+                else:
+                    fore_points = np.delete(fore_points, np.s_[min_dist_index:-1], 0).astype(int)
 
-                #はじめの中心点からは２方向に伸びるのでwhileも２つ
-                #前方向の探索
-                fore_count, fore_loop_flag = 0, 0
-                while 1:
-                    #終了条件：次の候補点の画素値が０の場合
-                    if reg_img[center1[0]][center1[1]] == 0:
-                        fore_ext = [center1[0]+minx, center1[1]+miny]
-                        break
-                    #点数が100点以上の場合は、ループのチェックが入る
-                    if fore_count > 100:
-                        fore_loop_flag, _ = self.check_loop(fore_points,  -1) #最後の点に対して近傍点を確認する
-                        break
-                    center1, current_center, current_nextPdist, pre_index1, pmsign1, dist, current_shift, reg_color = self.center_orientaion(center1, pre_index1, pmsign1, shift1, pil_img, line_templates, reg_color)
-                    if pre_index1 == -100:
-                        break
-                    fore_points.append([current_center[0]+minx, current_center[1]+miny, nextPdist1, dist, shift1])
-                    nextPdist1 = current_nextPdist
-                    shift1 = current_shift
-                    fore_count += 1
+            #後ろ方向の探索
+            back_count, back_loop_flag = 0, 0
+            while 1:
+                #終了条件：次の候補点の画素値が０の場合
+                if reg_img[center2[0]][center2[1]] == 0:
+                    break
+                #点数が100点以上の場合は、ループのチェックが入る
+                if back_count > 100:
+                    back_loop_flag, _ = self.check_loop(back_points,  -1) #最後の点に対して近傍点を確認する
+                    break
+                center2, current_center, current_nextPdist, pre_index2, pmsign2, dist, current_shift = self.center_orientation(center2, pre_index2, pmsign2, shift2, pil_img, line_templates)
+                if pre_index2 == -100:
+                    break
+                back_points.append([current_center[0]+minx, current_center[1]+miny, nextPdist2, dist, shift2])
+                nextPdist2 = current_nextPdist
+                shift2 = current_shift
+                back_count += 1
 
-                #ループが存在すると判定された場合、最初の点の近傍を確認する(最初の点の超近傍に点が存在すればその点をループの終点とする)
-                if fore_loop_flag == 1:
-                    print("Loop exists in fore center points process")
-                    start_flag, min_dist_index = self.check_loop(fore_points, 0)
-                    if start_flag == 0:
-                        # raise ValueError("ループ処理に場合分けが必要です")
-                        print("ループ処理に場合分けが必要です")
-                    else:
-                        fore_points = np.delete(fore_points, np.s_[min_dist_index:-1], 0).astype(int)
+            if back_loop_flag == 1:
+                print("Loop exists in back center points process")
+                start_flag, min_dist_index = self.check_loop(back_points, 0)
+                if start_flag == 0:
+                    # raise ValueError("ループ処理に場合分けが必要です")
+                    print("ループ処理に場合分けが必要です")
+                else:
+                    back_points = np.delete(back_points, np.s_[min_dist_index:-1], 0).astype(int)
 
-                #後ろ方向の探索
-                back_count, back_loop_flag = 0, 0
-                while 1:
-                    #終了条件：次の候補点の画素値が０の場合
-                    if reg_img[center2[0]][center2[1]] == 0:
-                        back_ext = [center2[0]+minx, center2[1]+miny]
-                        break
-                    #点数が100点以上の場合は、ループのチェックが入る
-                    if back_count > 100:
-                        back_loop_flag, _ = self.check_loop(back_points,  -1) #最後の点に対して近傍点を確認する
-                        break
-                    center2, current_center, current_nextPdist, pre_index2, pmsign2, dist, current_shift, reg_color = self.center_orientaion(center2, pre_index2, pmsign2, shift2, pil_img, line_templates, reg_color)
-                    if pre_index2 == -100:
-                        break
-                    back_points.append([current_center[0]+minx, current_center[1]+miny, nextPdist2, dist, shift2])
-                    nextPdist2 = current_nextPdist
-                    shift2 = current_shift
-                    back_count += 1
+            fore_points = list(reversed(fore_points))
+            center_points.extend(fore_points)
+            center_points.append([center_x+minx, center_y+miny, 30, first_dist, 0])
+            center_points.extend(back_points)  
 
-                if back_loop_flag == 1:
-                    print("Loop exists in back center points process")
-                    start_flag, min_dist_index = self.check_loop(back_points, 0)
-                    if start_flag == 0:
-                        # raise ValueError("ループ処理に場合分けが必要です")
-                        print("ループ処理に場合分けが必要です")
-                    else:
-                        back_points = np.delete(back_points, np.s_[min_dist_index:-1], 0).astype(int)
+            if len(center_points) > 6:
+                if center_points[0][4] == 1 and center_points[2][4] == 0:
+                    del center_points[0]
+                if center_points[-1][4] == 1 and center_points[-3][4] == 0:
+                    del center_points[-1]
 
-                fore_points = list(reversed(fore_points))
-                center_points.extend(fore_points)
-                center_points.append([center_x+minx, center_y+miny, 30, first_dist, 0])
-                center_points.extend(back_points)  
-                center_points_copy = center_points.copy()
+            if len(center_points) > 3:
+                if center_points[0][2] < 10:
+                    del center_points[0]
+                if center_points[-1][2] < 10:
+                    del center_points[-1]
 
-                if len(center_points) > 6:
-                    if center_points[0][4] == 1 and center_points[2][4] == 0:
-                        del center_points[0]
-                    if center_points[-1][4] == 1 and center_points[-3][4] == 0:
+            if len(center_points) >= 2:
+                dist1 = center_points[0][3]
+                dist2 = center_points[1][3]
+                if dist1 < dist2*0.75 and len(center_points) >= 3:
+                    xy1 = [center_points[0][0], center_points[0][1]]
+                    xy2 = [center_points[1][0], center_points[1][1]]
+                    xy3 = [center_points[2][0], center_points[2][1]]
+                    vectorx21 = xy1[0] - xy2[0]
+                    vectory21 = xy1[1] - xy2[1]
+                    vectorx32 = xy2[0] - xy3[0]
+                    vectory32 = xy2[1] - xy3[1]
+                    theta21 = int(math.degrees(math.atan2(vectory21, vectorx21)))
+                    theta32 = int(math.degrees(math.atan2(vectory32, vectorx32)))
+                    dif_theta321 = np.abs(theta21 - theta32)
+                    if dif_theta321 > 180:
+                        dif_theta321 = 360 - dif_theta321
+                    if dif_theta321 > 30:
+                        del center_points[0]           
+                dist1 = center_points[-1][3]
+                dist2 = center_points[-2][3]
+                if dist1 < dist2*0.75 and len(center_points) >= 3:
+                    xy1 = [center_points[-1][0], center_points[-1][1]]
+                    xy2 = [center_points[-2][0], center_points[-2][1]]
+                    xy3 = [center_points[-3][0], center_points[-3][1]]
+                    vectorx21 = xy1[0] - xy2[0]
+                    vectory21 = xy1[1] - xy2[1]
+                    vectorx32 = xy2[0] - xy3[0]
+                    vectory32 = xy2[1] - xy3[1]
+                    theta21 = int(math.degrees(math.atan2(vectory21, vectorx21)))
+                    theta32 = int(math.degrees(math.atan2(vectory32, vectorx32)))
+                    dif_theta321 = np.abs(theta21 - theta32)
+                    if dif_theta321 > 180:
+                        dif_theta321 = 360 - dif_theta321
+                    if dif_theta321 > 30:
                         del center_points[-1]
 
-                if len(center_points) > 3:
-                    if center_points[0][2] < 10:
-                        del center_points[0]
-                    if center_points[-1][2] < 10:
-                        del center_points[-1]
-
-                if len(center_points) >= 2:
-                    dist1 = center_points[0][3]
-                    dist2 = center_points[1][3]
-                    if dist1 < dist2*0.75 and len(center_points) >= 3:
-                        xy1 = [center_points[0][0], center_points[0][1]]
-                        xy2 = [center_points[1][0], center_points[1][1]]
-                        xy3 = [center_points[2][0], center_points[2][1]]
-                        vectorx21 = xy1[0] - xy2[0]
-                        vectory21 = xy1[1] - xy2[1]
-                        vectorx32 = xy2[0] - xy3[0]
-                        vectory32 = xy2[1] - xy3[1]
-                        theta21 = int(math.degrees(math.atan2(vectory21, vectorx21)))
-                        theta32 = int(math.degrees(math.atan2(vectory32, vectorx32)))
-                        dif_theta321 = np.abs(theta21 - theta32)
-                        if dif_theta321 > 180:
-                            dif_theta321 = 360 - dif_theta321
-                        if dif_theta321 > 30:
-                            del center_points[0]           
-                    dist1 = center_points[-1][3]
-                    dist2 = center_points[-2][3]
-                    if dist1 < dist2*0.75 and len(center_points) >= 3:
-                        xy1 = [center_points[-1][0], center_points[-1][1]]
-                        xy2 = [center_points[-2][0], center_points[-2][1]]
-                        xy3 = [center_points[-3][0], center_points[-3][1]]
-                        vectorx21 = xy1[0] - xy2[0]
-                        vectory21 = xy1[1] - xy2[1]
-                        vectorx32 = xy2[0] - xy3[0]
-                        vectory32 = xy2[1] - xy3[1]
-                        theta21 = int(math.degrees(math.atan2(vectory21, vectorx21)))
-                        theta32 = int(math.degrees(math.atan2(vectory32, vectorx32)))
-                        dif_theta321 = np.abs(theta21 - theta32)
-                        if dif_theta321 > 180:
-                            dif_theta321 = 360 - dif_theta321
-                        if dif_theta321 > 30:
-                            del center_points[-1]
-
-                center_points_list.append(center_points)
-                end_point_list.append([[center_points[0][0], center_points[0][1]], [center_points[-1][0], center_points[-1][1]]])
-
-                ####################################################
-                # print(center_points)    
-                # rc = gray2color(reg_img)
-                # rc2 = rc.copy()
-                # for xy in center_points:
-                #     rc = cv2.circle(rc, (xy[1]-miny, xy[0]-minx), 1, (255, 0, 0), -1)
-                #     # rc[xy[0]-minx][xy[1]-miny] = (255, 0, 0)
-                # for xy in center_points_copy:
-                #     rc2[xy[0]-minx][xy[1]-miny] = (255, 0, 0)
-                # Visual.visualize_3img(rc, rc2, rc)
-                ####################################################
-
-            count += 1
+            center_points_list.append(center_points)
+            end_point_list.append([[center_points[0][0], center_points[0][1]], [center_points[-1][0], center_points[-1][1]]])
 
         return center_points_list, end_point_list
 
@@ -726,78 +676,71 @@ class ConnectRegion():
 
         return [next_center_x, next_center_y], return_nextPdist, shift
 
-    #中心線の方向を求め、次の候補点を探索する(現在の中心点、１つ前の方向の添字、テンプレート画像リスト、方位数、テンプレート画像サイズの半分、次の候補点までの距離、前方向か後方向か、確認用カラー画像)
-    def center_orientaion(self, center_point, pre_index, pre_pmsign, shift, pil_img, line_angles, reg_color):
-        center_x, center_y = center_point[0], center_point[1]
-        cut = pil_img.crop((center_y-self.half_S, center_x-self.half_S, center_y+self.half_S+1, center_x+self.half_S+1)) #中心点を基準にテンプレート画像と同サイズに切り取る
+    def center_orientation(self, center_point, pre_index, pre_pmsign, shift, pil_img, line_angles):
+        center_x, center_y = center_point
+        cut = np.asarray(pil_img.crop((center_y-self.half_S, center_x-self.half_S, center_y+self.half_S+1, center_x+self.half_S+1))) #中心点を基準にテンプレート画像と同サイズに切り取る
         left, upper = center_x-self.half_S, center_y-self.half_S #切り取った画像の左端の座標を取得
-        cut = np.asarray(cut) #pillow型からarray型に変更
-        dists = [[] for n in range(0, self.Step)] #距離を格納する配列を作成 
-        dist_ps = [[] for n in range(0, self.Step)] #直線の端の点を格納する配列を作成
-        Visual = Visualize()
+
+        if pre_index == -1:
+            dists = np.array([np.array([10000, 0]) for n in range(0, self.Step)]) #距離を格納する配列を作成 
+            dist_ps = [[] for n in range(0, self.Step)] #直線の端の点を格納する配列を作成
+        else:
+            dists = np.array([np.array([10000, 0]) for n in range(0, 3)]) #距離を格納する配列を作成 
+            dist_ps = [[] for n in range(0, 3)] #直線の端の点を格納する配列を作成
+
+        dif_index_list = [0, 1, 15]
+        list_index = -1
+        ###############################################################################################################
+        for i in range(0, self.Step):     
+            dif_index = np.abs(pre_index - i)
+            if dif_index in dif_index_list or pre_index == -1:
+                list_index += 1
+                cut_line = cut*line_angles[i]                                                       #切り出した領域にテンプレートをかけ合わせる
+                line_pixel = np.nonzero(cut_line)                                                   #値を持つ座標を取得する
+                if len(line_pixel[0]) == 0:                                                         #かけ合わせた画像に値がない場合次に移る
+                    continue
+
+                ########################切り取られた線の端点を求める#########################################################
+                p1_x = np.min(line_pixel[0])                                                        #片方の端点のｘ座標を、x座標リストの最小値として取得する
+                p1_ys = line_pixel[1][np.where(line_pixel[0] == p1_x)]                              #x座標がp1_xとなるy座標を取得
+                p1_y = np.min(p1_ys)                                                                #p1_ysの中から最小のものを取り出す
+                cutter = np.sum(cut_line[p1_x-1:p1_x+2, p1_y-1:p1_y+2])                             #(p1_x, p1_y)の近傍９点を足し合わせる
+                if cutter > 2:                                                                      #足し合わせたものが２より大きければ、p1_yを更新
+                    p1_y = np.max(p1_ys)                                                            #p1_ysの中から最大のものを取り出す
+
+                p2_x = np.max(line_pixel[0])                                                        #もう片方の端点のx座標を、x座標のリストの最大値として取得する
+                p2_ys = line_pixel[1][np.where(line_pixel[0] == p2_x)]                              #x座標がp2_xとなるy座標を取得
+                p2_y = np.max(p2_ys)                                                                #p2_ysの中から最小のものを取り出す
+                cutter = np.sum(cut_line[p2_x-1:p2_x+2, p2_y-1:p2_y+2])                             #(p2_x, p2_y)の近傍９点を足し合わせる
+                if cutter > 2:                                                                      #足し合わせたものが２より大きければ、p2_yを更新            
+                    p2_y = np.min(p2_ys)                                                            #p1_ysの中から最大のものを取り出す
+                ###############################################################################################################
+
+                ########################切り取られた線の長さを求める###########################################################
+                dist = (p1_x-p2_x)**2 + (p1_y-p2_y)**2                                              #端点同士の距離を計算
+                dists[list_index] = [dist, i]                                                                     #リストに距離を格納
+                dist_ps[list_index] = [p1_x, p1_y, p2_x, p2_y]                                               #該当する端点座標をリストに格納
+        arg_sort_dists = np.argsort(dists[:, 0])                                                          #距離を格納したリストをソートする
         
-        ########################テンプレートの適用##############################################################
-        for i in range(0, self.Step):            
-            cut_line = cut*line_angles[i]                                                       #切り出した領域にテンプレートをかけ合わせる
-            line_pixel = np.nonzero(cut_line)                                                   #値を持つ座標を取得する
-            if len(line_pixel[0]) == 0:                                                         #かけ合わせた画像に値がない場合次に移る
-                continue
+        # sort_dists = []
+        # for index in arg_sort_dists:
+        #     sort_dists.append(dists[index][1])
+        ############################################################################################################### 
 
-            ########################切り取られた線の端点を求める#########################################################
-            p1_x = np.min(line_pixel[0])                                                        #片方の端点のｘ座標を、x座標リストの最小値として取得する
-            p1_ys = line_pixel[1][np.where(line_pixel[0] == p1_x)]                              #x座標がp1_xとなるy座標を取得
-            p1_y = np.min(p1_ys)                                                                #p1_ysの中から最小のものを取り出す
-            cutter = np.sum(cut_line[p1_x-1:p1_x+2, p1_y-1:p1_y+2])                             #(p1_x, p1_y)の近傍９点を足し合わせる
-            if cutter > 2:                                                                      #足し合わせたものが２より大きければ、p1_yを更新
-                p1_y = np.max(p1_ys)                                                            #p1_ysの中から最大のものを取り出す
-
-            p2_x = np.max(line_pixel[0])                                                        #もう片方の端点のx座標を、x座標のリストの最大値として取得する
-            p2_ys = line_pixel[1][np.where(line_pixel[0] == p2_x)]                              #x座標がp2_xとなるy座標を取得
-            p2_y = np.max(p2_ys)                                                                #p2_ysの中から最小のものを取り出す
-            cutter = np.sum(cut_line[p2_x-1:p2_x+2, p2_y-1:p2_y+2])                             #(p2_x, p2_y)の近傍９点を足し合わせる
-            if cutter > 2:                                                                      #足し合わせたものが２より大きければ、p2_yを更新            
-                p2_y = np.min(p2_ys)                                                            #p1_ysの中から最大のものを取り出す
-            ###############################################################################################################
-
-            ########################切り取られた線の長さを求める###########################################################
-            dist = (p1_x-p2_x)**2 + (p1_y-p2_y)**2                                              #端点同士の距離を計算
-            dists[i] = dist                                                                     #リストに距離を格納
-            dist_ps[i] = [p1_x, p1_y, p2_x, p2_y]                                               #該当する端点座標をリストに格納
-        sort_dists = np.argsort(dists)                                                          #距離を格納したリストをソートする
-        ###############################################################################################################                                                                    
-
-        ######################中心線に垂直となる線の方向(min_index)を取得#########################################################
-        count = 0                                                                               #何番目に距離が小さい添字を参照するかをcountに入れておく
-        while 1:
-            if count == 16:
-                return 0, 0, 0, 0, 0, -100, reg_color
-            min_index = sort_dists[count]                                                       #count番目に距離が小さい添字を取り出す
-            if len(dist_ps[min_index]) == 0:
-                count += 1
-                continue
-            next_index = np.abs(pre_index-min_index)                                            #１つ前の中心点で選ばれた添字と現在の添字の差を求める
-            if next_index == 1 or next_index == 15 or next_index == 0 or pre_index == -1:       #条件：１つ前の中心点で選ばれた添字と現在の添字の差が±1以内かpre_indexが-1
-                break
-            else:
-                count += 1
-                continue
-        ################################################################################################################
+        arg_min_index = arg_sort_dists[0]
+        min_index = dists[arg_min_index][1]
+        dif_index = np.abs(pre_index - min_index)
 
         #####################min_indexとなる線分の情報取得、中心点の更新################################################
-        try:
-            min_x1 = dist_ps[min_index][0]
-        except IndexError:
-            print(len(dist_ps))
-            print("dist_ps = ", dist_ps)
-            print("min_index = ", min_index)                                                          #最小となる線の端点のx座標を取得
-        min_x2 = dist_ps[min_index][2]                                                          #最小となる線の端点のx座標を取得
-        min_y1 = dist_ps[min_index][1]                                                          #最小となる線の端点のy座標を取得
-        min_y2 = dist_ps[min_index][3]                                                          #最小となる線の端点のy座標を取得
+        min_x1 = dist_ps[arg_min_index][0]                                                    #最小となる線の端点のx座標を取得
+        min_x2 = dist_ps[arg_min_index][2]                                                          #最小となる線の端点のx座標を取得
+        min_y1 = dist_ps[arg_min_index][1]                                                          #最小となる線の端点のy座標を取得
+        min_y2 = dist_ps[arg_min_index][3]                                                          #最小となる線の端点のy座標を取得
         mini_center_x = (min_x1+min_x2)//2                                                      #中心のx座標を取得した線分の中心のx座標に更新
         mini_center_y = (min_y1+min_y2)//2                                                      #中心のy座標を取得した線分の中心のy座標に更新
-        min_dist = dists[min_index]                                                             #最小となる線の長さを取得
+        min_dist = dists[arg_min_index][0]                                                             #最小となる線の長さを取得
         ################################################################################################################
-
+        
         ##############################最初の中心点における次の候補点の取得##############################################
         if pre_index == -1:
             theta1 = math.radians(180/self.Step*min_index+90)                                   #前方向の角度
@@ -811,29 +754,18 @@ class ConnectRegion():
             xsin2 = math.sin(theta2)
             ycos2 = math.cos(theta2)
             next_center_xy2, return_nextPdist2, _ = self.search_next_center_point([mini_center_x, mini_center_y], xsin2, ycos2, cut, [min_x1, min_y1], [min_x2, min_y2])
-
-           
+        
             pre_index = min_index                                                               #pre_indexに現在の方向の添字min_indexを代入
             center_x1 = next_center_xy1[0] + left                                                   #前方向の次の中心点のx座標を取得
             center_x2 = next_center_xy2[0] + left                                                   #後方向の次の中心点のx座標を取得
             center_y1 = next_center_xy1[1] + upper                                                  #前方向の次の中心点のy座標を取得
             center_y2 = next_center_xy2[1] + upper                                                  #後ろ方向の次の中心点のy座標を取得
-            
-            reg_color[mini_center_x+left][mini_center_y+upper] = (255,0,0)                      #現在の中心点を赤点で表示
-
-            ################################################
-            # cut = gray2color(cut)
-            # cut = cv2.arrowedLine(cut, (mini_center_y, mini_center_x), (next_center_xy1[1], next_center_xy1[0]), (0, 0, 255), 1)
-            # cut = cv2.arrowedLine(cut, (mini_center_y, mini_center_x), (next_center_xy2[1], next_center_xy2[1]), (0, 255, 0), 1)
-            # cut = cv2.line(cut, (min_y1, min_x1), (min_y2, min_x2), (255,255,0), 1)
-            # Visual.visualize_3img(cut, line_angles[min_index], cut_line)
-            ##################################################
 
             return [center_x1, center_y1], [center_x2, center_y2], return_nextPdist1, return_nextPdist2, pre_index, min_dist, pmsign1, pmsign2
         ################################################################################################################
 
         ###################################２点目以降の候補点の取得#####################################################
-        if next_index == 15:                                                                                #pre_indexとmin_indexの差が15だと90の前につく符号が入れ替わる
+        if dif_index == 15:                                                                                #pre_indexとmin_indexの差が15だと90の前につく符号が入れ替わる
             pre_pmsign *= -1                                                                                #pre_pmsignの符号を入れ替える
             theta = math.radians(180/self.Step*(min_index+1)+(90*pre_pmsign))                               #次の候補点が存在する方向を取得
         else:
@@ -842,20 +774,6 @@ class ConnectRegion():
         xsin = math.sin(theta)                                                                              #次の候補点へのxベクトル
         ycos = math.cos(theta)                                                                              #次の候補点へのyベクトル
         next_center_xy, return_nextPdist, shift = self.search_next_center_point([mini_center_x, mini_center_y], xsin, ycos, cut, [min_x1, min_y1], [min_x2, min_y2])
-        #################################################################################
-        # cut = gray2color(cut)
-        # cut = cv2.arrowedLine(cut, (mini_center_y, mini_center_x), (next_center_xy[1], next_center_xy[0]), (0, 0, 255), 1)
-        # cut = cv2.line(cut, (min_y1, min_x1), (min_y2, min_x2), (255,255,0), 1)
-        # cut[mini_center_x][mini_center_y] = (255, 0, 0)
-        # cut[next_center_xy[0]][next_center_xy[1]] = (0, 255, 0)
-        # Visual.visualize_3img(cut, line_angles[min_index], cut_line)
-
-        # print("mini_center = {}".format((mini_center_x, mini_center_y)))
-        # print("left, upper = {}".format((left, upper)))
-        # print("center = {}".format((center_x, center_y)))
-        # reg_color[mini_center_x+left][mini_center_y+upper] = (255, 0, 0)
-        # Visual.visualize_3img(reg_color, reg_color, reg_color)
-        ###################################################################################
 
         if next_center_xy == [-100, -100]:
             pre_index = -100
@@ -866,8 +784,7 @@ class ConnectRegion():
         next_center_x = next_center_xy[0] + left                                                                #次の中心点のx座標を取得
         next_center_y = next_center_xy[1] + upper                                                               #次の中心点のy座標を取得
 
-        return [next_center_x, next_center_y], [current_center_x, current_center_y], return_nextPdist, pre_index, pre_pmsign, min_dist, shift, reg_color
-        ###########################################################################################################
+        return [next_center_x, next_center_y], [current_center_x, current_center_y], return_nextPdist, pre_index, pre_pmsign, min_dist, shift
 
     def connect_point(self, xy, next_xy, line_xy):
         pre_x, pre_y = xy[0], xy[1]
@@ -1119,9 +1036,7 @@ class ConnectRegion():
         index_form = [i for i, x in enumerate(first_check_result) if x == 1]
 
         if len(combi) == 0:
-            not_combi = [i for i in range(0, region_num) if not i in index_form]
-            return combi, side, not_combi, index_form, [], [], center_points_list
-            raise ValueError("combiがありません connect_region内")
+            return combi, side, index_form, [], center_points_list
         #########################################################################################################          
 
         ###########################################接続する領域をリストに格納####################################
@@ -1168,41 +1083,6 @@ class ConnectRegion():
             for elem in pos[0]:
                 if not elem in unique_pos:
                     unique_pos.append(elem)
-            #領域番号での接続情報をnew_combiとして取得する
-            flat_pos = []
-            for i in unique_pos:
-                new_combi.append(list(set([combi[p][t] for p in i for t in (0,1)])))
-                flat_pos.extend([k for k in i])
-            [new_combi.append(combi[i]) for i, _ in enumerate(combi) if not i in flat_pos] 
-            output_combi = []
-            for x in new_combi:
-                if not x in output_combi:
-                    output_combi.append(x)
-
-            for i, part in enumerate(output_combi):
-                new_region_list.append([])
-                for j in part:
-                    new_region_list[i].extend(rregion[j])
-            output_combi_count = i
-
-            flat_combi = list(chain(*output_combi))
-
-            not_combi = []
-            [not_combi.append(i) for i in range(0, region_num) if not i in flat_combi]
-
-        else:
-            flat_combi = list(chain(*combi))
-            for part in combi:
-                new_region_list.append([])
-                for j in part:
-                    new_region_list.extend(rregion[j])
-            not_combi = [i for i in range(0, region_num) if not i in flat_combi]
-
-        [not_combi.remove(i) for i in index_form]
-
-        for index in not_combi:
-            new_region_list.append([])
-            new_region_list[-1].extend(rregion[index])
 
    #########################################################################################################
 
@@ -1211,7 +1091,7 @@ class ConnectRegion():
         # cv2.imwrite("./result/connected_color_img.png", color_img)
         # raise ValueError
 
-        return combi, side, not_combi, index_form, unique_pos, new_region_list, center_points_list
+        return combi, side, index_form, unique_pos, center_points_list
 
     def connect_center_line(self, current_region, current_side, pre_side_point, center_points_list):
         image = np.zeros((height, width, 3))
@@ -1522,7 +1402,7 @@ class Skeletonize():
 
         #周回部分削除(contours[0]は最外部の輪郭)
         for i in range(1, len(contours)):
-                line_img = cv2.drawContours(line_img, contours, i, 1, -1) #周回部分の内側を塗りつぶす
+            line_img = cv2.drawContours(line_img, contours, i, 1, -1) #周回部分の内側を塗りつぶす
         line_img = skeletonize(line_img, method="lee") #再度細線化
 
         return line_img
@@ -3260,28 +3140,34 @@ def main(input_image, pcd_matrix_index_image, pcd_matrix, MaxDepth):
     img_copy = input_image.copy()
     max_depth = MaxDepth
     cv2.imwrite(str(save_folder_path / "depthimg.png"), input_image)
-    
+
+    rg_time = time.time()
     ##################################セグメンテーション############################################
     RG = RegionGrowing(input_image)
-    region_list2, RG_edge_list = RG.search_seed()
+    region_list2 = RG.search_seed()
     SI.save_region(region_list2, "RG")
     print("Segmentation is succeeded!")
     ################################################################################################
+    rg_elapsed_time = time.time() - rg_time
+    print("Time costs for RegionGrowing is ", rg_elapsed_time)
 
     # V.visualize_region(region_list2)
 
+    cr_time = time.time()
     ##################################領域接続######################################################
     CR = ConnectRegion(region_list2)
     center_points_list, center_end_point_list = CR.search_center_points()
     rregion, new_center_points_list, skip_index = CR.skip_by_length(region_list2, center_points_list)
     line_list, check_result1, correct_connection_index = CR.first_check(new_center_points_list)
-    combi, side, not_combi, index_form, pos, new_region_list, center_points_list = CR.connect_region(new_center_points_list, rregion, check_result1)
-    print("Warning: not_combi, new_region_listは必要ありません connect_region")
+    combi, side, index_form, pos, center_points_list = CR.connect_region(new_center_points_list, rregion, check_result1)
     check_result, correct_line, interpolate_line, correct_line_zlist, correct_connection_index = CR.check_connect(combi, side, index_form,  pos, line_list, check_result1, correct_connection_index, skip_index)
     SI.save_centerpoints(center_points_list)
     print("Center point process is succeeded!")
     ################################################################################################
+    cr_elapsed_time = time.time() - cr_time
+    print("Time costs for ConnectRegion is ", cr_elapsed_time)
     
+    sk_time = time.time()
     ##################################細線化########################################################
     Skel = Skeletonize()
     S = Sort()
@@ -3290,19 +3176,28 @@ def main(input_image, pcd_matrix_index_image, pcd_matrix, MaxDepth):
     sorted_skel_list, end_point_list = S.sort_skel_list(skel_list, branch_point_list, ad_branch_point_list, end_point_list)
     print("Skeletonize is succeeded!")
     ################################################################################################
+    sk_elapsed_time = time.time() - sk_time
+    print("Time costs for Skeletonize is ", sk_elapsed_time)
 
+    cl_time = time.time()
     ##################################細線接続######################################################
     CL = ConnectLine()
     LC_skel_list, z_list, interpolate, LC_region_list = CL.__main__(sorted_skel_list, end_point_list, correct_line, correct_line_zlist, interpolate_line, correct_connection_index, skel_skip_index, skip_index)
     SI.save_region(LC_skel_list, "connect")
     print("Connect line process is succeeded!")
     ################################################################################################
+    cl_elapsed_time = time.time() - cl_time
+    print("Time costs for ConnectLine is ", cl_elapsed_time)
 
+    gli_time = time.time()
     ################################GLIの計算#######################################################
     GLI = GaussLinkingIintegral()
     objs_GLI, GLI_matrix = GLI.calculate_GLI(LC_skel_list, z_list)
     ################################################################################################
+    gli_elapsed_time = time.time() - gli_time
+    print("Time costs for GLI is ", gli_elapsed_time)
 
+    ga_time = time.time()
     ###############################把持位置の取得###################################################
     GA = Graspability()
     optimal_grasp, optimal_grasp2, obj_index = GA.__main__(objs_GLI, LC_skel_list, LC_region_list, interpolate, GLI_matrix, z_list, region_list2)
@@ -3311,6 +3206,8 @@ def main(input_image, pcd_matrix_index_image, pcd_matrix, MaxDepth):
     SI.save_grasp_position(LC_skel_list, obj_index, optimal_grasp)
     print("Decision of grasp position is succeeded!")
     ################################################################################################
+    ga_elapsed_time = time.time() - ga_time
+    print("Time costs for Graspability is ", ga_elapsed_time)
 
     ##############################モーションファイルの作成##########################################
     GP = GraspPoint()
