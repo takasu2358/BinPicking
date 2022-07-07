@@ -451,12 +451,13 @@ class ConnectRegion():
 
             #ループが存在すると判定された場合、最初の点の近傍を確認する(最初の点の超近傍に点が存在すればその点をループの終点とする)
             if fore_loop_flag == 1:
-                print("Loop exists in fore center points process")
+                # print("Loop exists in fore center points process")
                 start_flag, min_dist_index = self.check_loop(fore_points, 0)
-                if start_flag == 0:
-                    # raise ValueError("ループ処理に場合分けが必要です")
-                    print("ループ処理に場合分けが必要です")
-                else:
+                # if start_flag == 0:
+                #     # raise ValueError("ループ処理に場合分けが必要です")
+                #     # print("ループ処理に場合分けが必要です")
+                # else:
+                if start_flag != 0:
                     fore_points = np.delete(fore_points, np.s_[min_dist_index:-1], 0).astype(int)
 
             #後ろ方向の探索
@@ -478,12 +479,13 @@ class ConnectRegion():
                 back_count += 1
 
             if back_loop_flag == 1:
-                print("Loop exists in back center points process")
+                # print("Loop exists in back center points process")
                 start_flag, min_dist_index = self.check_loop(back_points, 0)
-                if start_flag == 0:
-                    # raise ValueError("ループ処理に場合分けが必要です")
-                    print("ループ処理に場合分けが必要です")
-                else:
+                # if start_flag == 0:
+                #     # raise ValueError("ループ処理に場合分けが必要です")
+                #     print("ループ処理に場合分けが必要です")
+                # else:
+                if start_flag != 0:
                     back_points = np.delete(back_points, np.s_[min_dist_index:-1], 0).astype(int)
 
             fore_points = list(reversed(fore_points))
@@ -2279,7 +2281,6 @@ class ConnectLine():
         count_list, switch_list = [], []
         depth = img_copy.copy() #深度画像をdepthとしてコピー
         depth = cv2.morphologyEx(depth, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) #深度画像にクロージング処理で穴埋め
-        MI, V = MakeImage(), Visualize()
 
         vector_xlist, vector_ylist = self.line_orientation(skel_list)
 
@@ -2289,19 +2290,6 @@ class ConnectLine():
                 z = depth[end_point_list[i][j][0]][end_point_list[i][j][1]] #深度画像で終点の座標の値を求める
                 end_point_list[i][j] = list(np.append(end_point_list[i][j], round(z, 2))) #z座標の値を小数第二位で丸め、end_point_listに加える
 
-        # image = np.zeros((height, width))
-        # for skel in skel_list:
-        #     image += MI.make_image(skel, 1)
-        # image = gray2color(image)
-        # for double_point in end_point_list:
-        #     for point in double_point:
-        #         # image_copy = image.copy()
-        #         x = int(point[0])
-        #         y = int(point[1])
-        #         image_copy = cv2.circle(image, (y, x), 3, (255, 0, 0), -1)
-        #         V.visualize_1img(image_copy)
-        # raise ValueError
-
         cost, index = [], []
         min_distance_threshold = 15
         cost_threshold = 200
@@ -2309,46 +2297,38 @@ class ConnectLine():
         beta = 3
         gamma = 3
         delta = 2
+        sum_theta_threshold = 60
+        dif_depth_threshold = 50
+        distance_threshold = 150
 
-        # allimg = np.zeros((height, width, 3))
-        # alpha = 2
-        # for skel, end_point, vxs, vys in zip(skel_list, end_point_list, vector_xlist, vector_ylist):
-        #     simg = MI.make_image(skel, 1)
-        #     simg = gray2color(simg)
-        #     x1 = int(end_point[0][0])
-        #     y1 = int(end_point[0][1])
-        #     x2 = int(end_point[1][0])
-        #     y2 = int(end_point[1][1])
-        #     simg = cv2.circle(simg, (y1, x1), 2, (255, 0, 0), -1)
-        #     simg = cv2.circle(simg, (y2, x2), 2, (0, 0, 255), -1)
-        #     vx1 = vxs[0]
-        #     vy1 = vys[0]
-        #     vx2 = vxs[1]
-        #     vy2 = vys[1]
-        #     simg = cv2.arrowedLine(simg, (y1, x1), (y1+alpha*vy1, x1+alpha*vx1), (255, 0, 0), 1)
-        #     simg = cv2.arrowedLine(simg, (y2, x2), (y2+alpha*vy2, x2+alpha*vx2), (0, 0, 255), 1)
-        #     # V.visualize_1img(simg)
-        #     allimg += simg
-        # V.visualize_1img(allimg)
-        # raise ValueError
 
+        length = len(end_point_list)
+        cost = [[[], []] for i in range(length)]
+        index = [[[], []] for i in range(length)]
         #終点同士の距離を求める
-        for count in range(0, len(end_point_list)): #countは細線の番号を表す(end_point_listの第1添字)
-            cost.append([[] for t in range(0, 2)]) #costに細線の数だけ空の配列を加える
-            index.append([[] for t in range(0, 2)]) #indexに細線の数だけ空の配列を加える
+        for count in range(0, length): #countは細線の番号を表す(end_point_listの第1添字)
             for switch in range(0, 2): #switchは終点の番号を表す(終点は細線一本につき2点ある)(end_point_listの第2添字)
-                end1 = [end_point_list[count][switch][0], end_point_list[count][switch][1]]
+                end1 = end_point_list[count][switch][0:2]
                 theta1 = int(math.degrees(math.atan2(vector_ylist[count][switch], vector_xlist[count][switch])))
                 depth1 = end_point_list[count][switch][2]
-                for i in range(count+1, len(end_point_list)): #ペアとなる点が含まれる細線番号(end_point_listの第1添字)
+                for i in range(count+1, length): #ペアとなる点が含まれる細線番号(end_point_listの第1添字)
                     for j in range(0, 2): #ペアとなる点の終点の番号(end_point_listの第2添字)
-                        end2 = [end_point_list[i][j][0], end_point_list[i][j][1]]
+
                         theta2 = int(math.degrees(math.atan2(vector_ylist[i][j], vector_xlist[i][j])))
-                        depth2 = end_point_list[i][j][2]
-
                         sum_theta = np.abs(np.abs(theta1 - theta2) - 180)
+                        if sum_theta > sum_theta_threshold:
+                            continue
 
+                        depth2 = end_point_list[i][j][2]
+                        dif_depth = np.abs(depth1 - depth2)
+                        if dif_depth > dif_depth_threshold:
+                            continue
+
+                        end2 = end_point_list[i][j][0:2]
+                        # distance = np.abs(end1[0]-end2[0]) + np.abs(end1[1]-end2[1])
                         distance = int(np.sqrt((end1[0]-end2[0])**2 + (end1[1]-end2[1])**2))
+                        if distance > distance_threshold:
+                            continue
 
                         vx12 = end2[0] - end1[0]
                         vy12 = end2[1] - end1[1]
@@ -2362,18 +2342,14 @@ class ConnectLine():
                             dif_theta2 = 360 - dif_theta2
                         dif_theta = (dif_theta1 + dif_theta2)//2
 
-                        dif_depth = np.abs(depth1 - depth2)
-
                         if distance <= min_distance_threshold:
                             par_cost = alpha*distance + beta*sum_theta + gamma*dif_depth//3 + delta*dif_depth
                         else:
                             par_cost = alpha*distance + beta*sum_theta + gamma*dif_theta + delta*dif_depth
           
                         cost[count][switch].append(par_cost)
-                        # print(cost[count][switch])
                         index[count][switch].append((i, j)) #countとswitchが注目画素の添字、iとjがペアとなる画素の添字
 
-        image = np.zeros((height, width))
         flat_cost = sum(sum(cost, []), []) #costを一次元リストに変換
         if flat_cost == []:
             return [], [], []
@@ -2411,28 +2387,14 @@ class ConnectLine():
                     continue
                 break
 
-            # x0 = int(end_point_list[count][switch][0]) #注目画素のx座標を取得
-            # y0 = int(end_point_list[count][switch][1]) #注目画素のy座標を取得
-            # x = int(end_point_list[i][j][0]) #ペアの画素のx座標を取得
-            # y = int(end_point_list[i][j][1]) #ペアの画素のy座標を取得
             count_list.append([count, i]) #count_listは結ぶべき線が２コ１で入ったリスト
             switch_list.append([switch, j]) #switch_listは結ぶべき端点が２コ１で入ったリスト
-    
-            # image = cv2.line(image, (y0, x0), (y, x), (1, 0, 0), 1) #終点を結ぶ
-            # image = cv2.circle(image, (y0, x0), 3, (0,0,1), -1)
-            # image = cv2.circle(image, (y, x), 3, (0,0,1), -1)
 
             flat_cost = sum(sum(cost, []), []) #costを一次元リストに変換
             #costの中身が空なら終了
             if not flat_cost:
                 break
 
-        # V.visualize_1img(image)
-
-        # depth = gray2color(depth/255)
-        # image[image[:,:,0]>0] = (0,1,1)
-        # depth = depth - image
-        # visualize_skeleton(image, depth, depth)
         data = list(itertools.chain.from_iterable(count_list))
         data = list(set(data))
         check_data = list(range(len(skel_list)))
@@ -2508,34 +2470,36 @@ class GaussLinkingIintegral():
 
     def __init__(self):
         self.full_length = cfg["full_length"]
+        self.len_threshold = self.full_length*2//3
 
     def calculate_GLI(self, skel_list, z_list):
         len_skel = len(skel_list)
         GLI = np.zeros((len_skel, len_skel))
         objs_GLI = np.zeros((len_skel))
-        image = np.zeros((height, width, 3))
         interval = 10
-        MI = MakeImage()
-        V = Visualize()
+
+        len_list = [len(skel) for skel in skel_list]
 
         if len_skel == 1:
             return [0], [0]
 
         ###########線iと線jからintervalごとに点を取り出しGLIを計算####################################
         for i in range(0, len_skel-1):
+            if len_list[i] < self.len_threshold:
+                continue
             skel1 = skel_list[i]
             z1 = z_list[i]
             for j in range(i+1, len_skel):
+                if len_list[j] < self.len_threshold:
+                    continue
                 num = 0
                 skel2 = skel_list[j]
                 z2 = z_list[j]
-                for k in range(0, len(skel1)-interval, interval):
+                for k in range(0, len_list[i]-interval, interval):
                     r1 = np.array([skel1[k][0], skel1[k][1], z1[k]])
                     next_r1 = np.array([skel1[k+interval][0], skel1[k+interval][1], z1[k+interval]])
                     dr1 = next_r1 - r1
-                    # image = cv2.line(image, (r1[1], r1[0]), (next_r1[1], next_r1[0]), (1,0,0), 1)
-                    # image = cv2.circle(image, (r1[1], r1[0]), 3, (0,0,1), -1)
-                    for l in range(0, len(skel2)-interval, interval):
+                    for l in range(0, len_list[j]-interval, interval):
                         r2 = np.array([skel2[l][0], skel2[l][1], z2[l]])
                         next_r2 = np.array([skel2[l+interval][0], skel2[l+interval][1], z2[l+interval]])
                         dr2 = next_r2 - r2
@@ -2543,35 +2507,14 @@ class GaussLinkingIintegral():
                         norm_r12 = np.linalg.norm(r12)
                         num += np.dot(np.cross(dr1, dr2), r12) / (norm_r12**3)
                 GLI[i][j] = abs(num)
-                GLI[j][i] = abs(num)       
-            # V.visualize_skeleton(image, image, image)
-            # image = np.zeros((height, width, 3))
+                GLI[j][i] = abs(num)    
 
         for i in range(0, len_skel): 
-            objs_GLI[i] = np.sum(GLI[i]) / ((len(skel1)-interval)//interval+1)
-        
-        for i in range(0, len_skel):
-            ske = MI.make_image(skel_list[i],1)
-            if i == 0:
-                image[ske>0] = (255, 0, 0)
-            elif i == 1:
-                image[ske>0] = (0, 255, 0)
-            elif i == 2:
-                image[ske>0] = (0, 0, 255)
-            elif i == 3:
-                image[ske>0] = (255, 255, 0)
-            elif i == 4:
-                image[ske>0] = (255, 0, 255)
-            elif i == 5:
-                image[ske>0] = (0, 255, 255)
-            elif i == 6:
-                image[ske>0] = (255, 255, 255)
-            elif i == 7:
-                image[ske>0] = (0.5, 0, 0.8)
-            elif i == 8:
-                image[ske>0] = (0.2, 0.7, 0.5)
-                
-        # V.visualize_3img(image,image,image)
+            objs_GLI_num = np.sum(GLI[i]) / ((len_list[i]-interval)//interval+1)
+            if objs_GLI_num == 0 or math.isnan(objs_GLI_num):
+                objs_GLI[i] = 100
+            else:
+                objs_GLI[i] = objs_GLI_num
 
         return objs_GLI, GLI
 
@@ -2936,7 +2879,7 @@ class Graspability():
         if z == 0:
             return optimal_grasp
 
-        z -= int(15*(100/max_depth))
+        z -= int(15*(100/max_depth)) + 15
         if z < 0:
             z = 0
 
@@ -2959,6 +2902,7 @@ class Graspability():
         :
         3なら最小開き幅でのみ衝突
         '''       
+        # V = Visualize()
         for angle in np.arange(-22.5, 33.75, 22.5):
         # for angle in np.arange(0, 10, 22.5):
             collision_per_angle.append(100)
@@ -2970,11 +2914,10 @@ class Graspability():
                 # CI_crop_color[Hc_rotate > 0] = [255, 0, 0]
                 CI_crop[Hc_rotate == 0] = 0
                 if np.sum(CI_crop) > 0:
-                    # V.visualize_1img(CI_crop_color)
                     collision_per_angle[-1] = i
                     break
+                # V.visualize_1img(CI_crop_color)
 
-        num_template = len(Hc_rotate_list)
         _, Wc = cv2.threshold(depth,z,255,cv2.THRESH_BINARY)
         Wc = self.cv2pil(Wc)
         Wc_crop = Wc.crop((poi[1]-self.cutsize, poi[0]-self.cutsize, poi[1]+self.cutsize, poi[0]+self.cutsize))

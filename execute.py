@@ -13,7 +13,7 @@ root_dir = os.environ['HOME']
 download_dir = os.path.join(root_dir, "ダウンロード")
 grasp_dir = os.path.join(download_dir, "binpicking_git")
 data_dir = os.path.join(download_dir, "data_folder")
-ply_path = os.path.join(data_dir, "ply/out.ply")
+ply_path = os.path.join(data_dir, "ply/out1.ply")
 motionfile_path = os.path.join(data_dir, "motionfile/motionfile.dat")
 sys.path.append(str(grasp_dir))
 ########################################################################
